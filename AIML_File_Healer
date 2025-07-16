@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""
+AIML File Healer
+Fixes common XML parsing errors in AIML files before training
+"""
+
+import os
+import re
+import shutil
+from pathlib import Path
+import logging
+from typing import List, Tuple, Dict
+import xml.etree.ElementTree as ET
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class AIMLHealer:
+    """Heals common XML parsing errors in AIML files"""
+    
+    def __init__(self):
+        self.fixes_applied = 0
+        self.files_healed = 0
+        self.files_failed = 0
+        
+    def heal_aiml_file(self, filepath: Path, backup: bool = True) -> bool:
+        """Heal a single AIML file"""
+        try:
+            # Read the file content
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            original_content = content
+            fixes_applied = 0
+            
+            # Apply various fixes
+            content, fixes = self._fix_unbound_prefixes(content)
+            fixes_applied += fixes
+            
+            content, fixes = self._fix_junk_after_document(content)
+            fixes_applied += fixes
+            
+            content, fixes = self._fix_malformed_tags(content)
+            fixes_applied += fixes
+            
+            content, fixes = self._fix_unescaped_entities(content)
+            fixes_applied += fixes
+            
+            content, fixes = self._fix_missing_closing_tags(content)
+            fixes_applied += fixes
+            
+            content, fixes = self._fix_duplicate_attributes(content)
+            fixes_applied += fixes
+            
+            content, fixes = self._fix_invalid_characters(content)
+            fixes_applied += fixes
+            
+            # If fixes were applied, save the healed file
+            if fixes_applied > 0:
+                if backup:
+                    backup_path = filepath.with_suffix('.aiml.backup')
+                    shutil.copy2(filepath, backup_path)
+                    logger.info(f"Backup created: {backup_path}")
+                
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                logger.info(f"Healed {filepath.name}: {fixes_applied} fixes applied")
+                self.fixes_applied += fixes_applied
+                self.files_healed += 1
+                return True
+            
+            return True  # File was already clean
+            
+        except Exception as e:
+            logger.error(f"Failed to heal {filepath.name}: {e}")
+            self.files_failed += 1
+            return False
+    
+    def _fix_unbound_prefixes(self, content: str) -> Tuple[str, int]:
+        """Fix unbound prefix errors"""
+        fixes = 0
+        
+        # Common unbound prefix patterns
+        prefix_fixes = [
+            (r'<(\w+):(\w+)', r'<\2'),  # Remove namespace prefixes
+            (r'</(\w+):(\w+)', r'</\2'),  # Remove namespace prefixes in closing tags
+            (r'(\w+):(\w+)=', r'\2='),  # Remove namespace prefixes in attributes
+        ]
+        
+        for pattern, replacement in prefix_fixes:
+            new_content = re.sub(pattern, replacement, content)
+            if new_content != content:
+                content = new_content
+                fixes += 1
+        
+        return content, fixes
+    
+    def _fix_junk_after_document(self, content: str) -> Tuple[str, int]:
+        """Fix junk after document element"""
+        fixes = 0
+        
+        # Find the last closing </aiml> tag
+        aiml_end = content.rfind('</aiml>')
+        if aiml_end != -1:
+            # Remove everything after the last </aiml> tag
+            content = content[:aiml_end + 7]
+            fixes += 1
+        
+        return content, fixes
+    
+    def _fix_malformed_tags(self, content: str) -> Tuple[str, int]:
+        """Fix malformed XML tags"""
+        fixes = 0
+        
+        # Fix self-closing tags that aren't properly closed
+        content = re.sub(r'<(\w+)([^>]*?)(?<!/)>', r'<\1\2/>', content)
+        
+        # Fix tags with missing angle brackets
+        content = re.sub(r'([^<])(\w+)([^>])', r'\1<\2>\3', content)
+        
+        # Fix duplicate angle brackets
+        content = re.sub(r'<<', r'<', content)
+        content = re.sub(r'>>', r'>', content)
+        
+        return content, fixes
+    
+    def _fix_unescaped_entities(self, content: str) -> Tuple[str, int]:
+        """Fix unescaped XML entities"""
+        fixes = 0
+        
+        # Common entity fixes
+        entity_fixes = [
+            ('&', '&amp;'),
+            ('<', '&lt;'),
+            ('>', '&gt;'),
+            ('"', '&quot;'),
+            ("'", '&apos;')
+        ]
+        
+        # Only fix entities that aren't already escaped
+        for char, entity in entity_fixes:
+            # Don't fix entities that are already in tags or already escaped
+            pattern = f'(?<!&)(?<!&amp;)(?<!&lt;)(?<!&gt;)(?<!&quot;)(?<!&apos;){re.escape(char)}(?![a-zA-Z0-9#])'
+            new_content = re.sub(pattern, entity, content)
+            if new_content != content:
+                content = new_content
+                fixes += 1
+        
+        return content, fixes
+    
+    def _fix_missing_closing_tags(self, content: str) -> Tuple[str, int]:
+        """Fix missing closing tags"""
+        fixes = 0
+        
+        # Common AIML tags that should be self-closing
+        self_closing_tags = ['br', 'hr', 'img', 'input', 'meta', 'link']
+        
+        for tag in self_closing_tags:
+            # Find opening tags without closing tags
+            pattern = rf'<{tag}([^>]*?)(?<!/)>'
+            replacement = rf'<{tag}\1/>'
+            new_content = re.sub(pattern, replacement, content)
+            if new_content != content:
+                content = new_content
+                fixes += 1
+        
+        return content, fixes
+    
+    def _fix_duplicate_attributes(self, content: str) -> Tuple[str, int]:
+        """Fix duplicate attributes in tags"""
+        fixes = 0
+        
+        # Find tags with duplicate attributes
+        tag_pattern = r'<(\w+)([^>]*)>'
+        
+        def fix_duplicates(match):
+            tag_name = match.group(1)
+            attributes = match.group(2)
+            
+            # Split attributes and remove duplicates
+            attr_pairs = re.findall(r'(\w+)=["\'][^"\']*["\']', attributes)
+            seen = set()
+            unique_attrs = []
+            
+            for attr in attr_pairs:
+                if attr not in seen:
+                    unique_attrs.append(attr)
+                    seen.add(attr)
+            
+            # Reconstruct the tag
+            fixed_attrs = ' '.join(unique_attrs)
+            return f'<{tag_name} {fixed_attrs}>'
+        
+        new_content = re.sub(tag_pattern, fix_duplicates, content)
+        if new_content != content:
+            content = new_content
+            fixes += 1
+        
+        return content, fixes
+    
+    def _fix_invalid_characters(self, content: str) -> Tuple[str, int]:
+        """Fix invalid XML characters"""
+        fixes = 0
+        
+        # Remove control characters except newlines and tabs
+        content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', content)
+        
+        # Fix invalid UTF-8 sequences
+        try:
+            content.encode('utf-8')
+        except UnicodeEncodeError:
+            # Remove problematic characters
+            content = content.encode('utf-8', errors='ignore').decode('utf-8')
+            fixes += 1
+        
+        return content, fixes
+    
+    def heal_directory(self, directory: Path, backup: bool = True) -> Dict:
+        """Heal all AIML files in a directory"""
+        logger.info(f"Starting to heal AIML files in {directory}")
+        
+        aiml_files = list(directory.glob("*.aiml"))
+        logger.info(f"Found {len(aiml_files)} AIML files to heal")
+        
+        for aiml_file in aiml_files:
+            self.heal_aiml_file(aiml_file, backup)
+        
+        return {
+            'files_processed': len(aiml_files),
+            'files_healed': self.files_healed,
+            'files_failed': self.files_failed,
+            'total_fixes': self.fixes_applied
+        }
+    
+    def validate_aiml_file(self, filepath: Path) -> bool:
+        """Validate that an AIML file can be parsed"""
+        try:
+            tree = ET.parse(filepath)
+            root = tree.getroot()
+            
+            # Basic validation
+            if root.tag != 'aiml':
+                logger.warning(f"{filepath.name}: Root element is not 'aiml'")
+                return False
+            
+            # Check for category elements
+            categories = root.findall('.//category')
+            if not categories:
+                logger.warning(f"{filepath.name}: No category elements found")
+                return False
+            
+            return True
+            
+        except ET.ParseError as e:
+            logger.error(f"{filepath.name}: XML parsing error - {e}")
+            return False
+        except Exception as e:
+            logger.error(f"{filepath.name}: Validation error - {e}")
+            return False
+    
+    def validate_directory(self, directory: Path) -> Dict:
+        """Validate all AIML files in a directory"""
+        logger.info(f"Validating AIML files in {directory}")
+        
+        aiml_files = list(directory.glob("*.aiml"))
+        valid_files = 0
+        invalid_files = 0
+        
+        for aiml_file in aiml_files:
+            if self.validate_aiml_file(aiml_file):
+                valid_files += 1
+            else:
+                invalid_files += 1
+        
+        return {
+            'total_files': len(aiml_files),
+            'valid_files': valid_files,
+            'invalid_files': invalid_files
+        }
+
+def main():
+    """Main function to heal AIML files"""
+    print("🔧 AIML File Healer")
+    print("=" * 50)
+    
+    aiml_dir = Path("TrainingData/AIML")
+    if not aiml_dir.exists():
+        print(f"❌ AIML directory {aiml_dir} not found!")
+        return 1
+    
+    healer = AIMLHealer()
+    
+    # First, validate the current state
+    print("📋 Validating current AIML files...")
+    validation_before = healer.validate_directory(aiml_dir)
+    print(f"Before healing: {validation_before['valid_files']}/{validation_before['total_files']} files valid")
+    
+    # Heal the files
+    print("\n🔧 Healing AIML files...")
+    healing_results = healer.heal_directory(aiml_dir, backup=True)
+    print(f"Healing completed:")
+    print(f"  Files processed: {healing_results['files_processed']}")
+    print(f"  Files healed: {healing_results['files_healed']}")
+    print(f"  Files failed: {healing_results['files_failed']}")
+    print(f"  Total fixes applied: {healing_results['total_fixes']}")
+    
+    # Validate again
+    print("\n📋 Validating healed AIML files...")
+    validation_after = healer.validate_directory(aiml_dir)
+    print(f"After healing: {validation_after['valid_files']}/{validation_after['total_files']} files valid")
+    
+    # Summary
+    improvement = validation_after['valid_files'] - validation_before['valid_files']
+    print(f"\n✅ Healing summary:")
+    print(f"  Improvement: +{improvement} valid files")
+    print(f"  Success rate: {validation_after['valid_files']/validation_after['total_files']*100:.1f}%")
+    
+    if improvement > 0:
+        print("\n🎉 AIML files healed successfully! Ready for training.")
+    else:
+        print("\n⚠️  No improvement in file validity. Some files may need manual fixing.")
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main()) 
