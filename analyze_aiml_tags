@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""
+Comprehensive AIML tag analyzer
+Searches through all AIML files to identify every tag used and ensures our parser handles them all
+"""
+
+import os
+import re
+import glob
+from collections import defaultdict, Counter
+
+def find_all_aiml_files():
+    """Find all AIML files in the project"""
+    aiml_files = []
+    
+    # Search in multiple directories
+    search_paths = [
+        "TrainingData/AIML/*.aiml",
+        "Project_Alice/Alice_v*/src/bots/alice/aiml/*.aiml",
+        "Project_Alice/Alice_v*/src/main/assets/Alice/bots/alice/aiml/*.aiml",
+        "aiml/botdata/alice/*.aiml"
+    ]
+    
+    for pattern in search_paths:
+        aiml_files.extend(glob.glob(pattern))
+    
+    return aiml_files
+
+def extract_tags_from_file(file_path):
+    """Extract all XML tags from an AIML file"""
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        # Find all XML tags
+        tag_pattern = r'<([^>/\s]+)(?:\s+[^>]*)?>'
+        tags = re.findall(tag_pattern, content)
+        
+        # Also find self-closing tags
+        self_closing_pattern = r'<([^>/\s]+)(?:\s+[^>]*)?/>'
+        self_closing_tags = re.findall(self_closing_pattern, content)
+        
+        # Combine and clean up
+        all_tags = tags + self_closing_tags
+        
+        # Remove XML declarations and comments
+        filtered_tags = []
+        for tag in all_tags:
+            if not tag.startswith('?') and not tag.startswith('!--'):
+                filtered_tags.append(tag.lower())
+        
+        return filtered_tags
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return []
+
+def analyze_aiml_tags():
+    """Analyze all AIML tags in the codebase"""
+    print("🔍 Analyzing AIML Tags Across All Files")
+    print("=" * 60)
+    
+    # Find all AIML files
+    aiml_files = find_all_aiml_files()
+    print(f"📁 Found {len(aiml_files)} AIML files")
+    
+    # Extract tags from all files
+    all_tags = []
+    tag_sources = defaultdict(list)
+    
+    for file_path in aiml_files:
+        tags = extract_tags_from_file(file_path)
+        all_tags.extend(tags)
+        
+        # Track which files contain which tags
+        for tag in set(tags):
+            tag_sources[tag].append(os.path.basename(file_path))
+    
+    # Count tag frequencies
+    tag_counts = Counter(all_tags)
+    
+    # Categorize tags
+    standard_aiml_tags = {
+        'aiml', 'category', 'pattern', 'template', 'star', 'set', 'get', 
+        'condition', 'random', 'li', 'srai', 'think', 'bot', 'person', 
+        'uppercase', 'lowercase', 'learn', 'eval', 'map', 'that', 'topic',
+        'input', 'thatstar', 'topicstar', 'gossip', 'system', 'javascript',
+        'date', 'id', 'size', 'version', 'name', 'value', 'index'
+    }
+    
+    cyc_tags = {
+        'cyc', 'cycsystem', 'cycrandom', 'cycassert', 'cycretract', 'cycterm',
+        'sentence', 'cycquery', 'fi-ask', 'fi-complete', 'fi-find-or-create',
+        'why-isa', 'guard'
+    }
+    
+    html_tags = {
+        'br', 'p', 'b', 'i', 'u', 'em', 'strong', 'blockquote', 'ul', 'ol',
+        'a', 'img', 'table', 'tr', 'td', 'th', 'form', 'select', 'option',
+        'textarea', 'button', 'div', 'span', 'pre', 'code', 'hr', 'meta',
+        'link', 'script', 'style', 'title', 'head', 'body', 'html', 'xml'
+    }
+    
+    # Analyze found tags
+    found_standard = set()
+    found_cyc = set()
+    found_html = set()
+    found_other = set()
+    
+    for tag in tag_counts.keys():
+        if tag in standard_aiml_tags:
+            found_standard.add(tag)
+        elif tag in cyc_tags:
+            found_cyc.add(tag)
+        elif tag in html_tags:
+            found_html.add(tag)
+        else:
+            found_other.add(tag)
+    
+    # Print results
+    print(f"\n📊 TAG ANALYSIS RESULTS:")
+    print(f"   Total unique tags found: {len(tag_counts)}")
+    print(f"   Standard AIML tags: {len(found_standard)}")
+    print(f"   Cyc/Knowledge tags: {len(found_cyc)}")
+    print(f"   HTML tags: {len(found_html)}")
+    print(f"   Other/Unknown tags: {len(found_other)}")
+    
+    print(f"\n🎯 STANDARD AIML TAGS FOUND:")
+    for tag in sorted(found_standard):
+        count = tag_counts[tag]
+        print(f"   ✅ {tag}: {count} occurrences")
+    
+    print(f"\n🧠 CYC/KNOWLEDGE TAGS FOUND:")
+    for tag in sorted(found_cyc):
+        count = tag_counts[tag]
+        print(f"   🔬 {tag}: {count} occurrences")
+    
+    print(f"\n🌐 HTML TAGS FOUND:")
+    for tag in sorted(found_html):
+        count = tag_counts[tag]
+        print(f"   📄 {tag}: {count} occurrences")
+    
+    print(f"\n❓ OTHER/UNKNOWN TAGS FOUND:")
+    for tag in sorted(found_other):
+        count = tag_counts[tag]
+        print(f"   ❓ {tag}: {count} occurrences")
+    
+    # Check which tags our parser currently handles
+    current_parser_tags = {
+        'star', 'set', 'get', 'condition', 'random', 'li', 'srai', 
+        'uppercase', 'lowercase', 'learn', 'eval', 'map', 'that', 
+        'person', 'think', 'bot'
+    }
+    
+    print(f"\n🔧 PARSER COVERAGE ANALYSIS:")
+    missing_tags = found_standard - current_parser_tags
+    extra_tags = current_parser_tags - found_standard
+    
+    if missing_tags:
+        print(f"   ❌ MISSING TAGS (need to add to parser):")
+        for tag in sorted(missing_tags):
+            print(f"      - {tag}")
+    else:
+        print(f"   ✅ All standard AIML tags are handled!")
+    
+    if extra_tags:
+        print(f"   ⚠️ EXTRA TAGS (in parser but not found):")
+        for tag in sorted(extra_tags):
+            print(f"      - {tag}")
+    
+    # Show most common tags
+    print(f"\n📈 MOST COMMON TAGS:")
+    for tag, count in tag_counts.most_common(20):
+        print(f"   {tag}: {count} occurrences")
+    
+    return {
+        'tag_counts': tag_counts,
+        'found_standard': found_standard,
+        'found_cyc': found_cyc,
+        'found_html': found_html,
+        'found_other': found_other,
+        'missing_tags': missing_tags,
+        'tag_sources': tag_sources
+    }
+
+def generate_parser_updates(analysis_results):
+    """Generate code updates needed for the parser"""
+    print(f"\n🔧 GENERATING PARSER UPDATES")
+    print("=" * 60)
+    
+    missing_tags = analysis_results['missing_tags']
+    
+    if not missing_tags:
+        print("✅ No parser updates needed - all tags are handled!")
+        return
+    
+    print("📝 Parser updates needed for the following tags:")
+    
+    # Generate code for missing tags
+    for tag in sorted(missing_tags):
+        print(f"\n🎯 Adding support for: <{tag}>")
+        
+        if tag in ['input', 'thatstar', 'topicstar']:
+            print(f"   - Add pattern context detection for {tag}")
+        elif tag in ['gossip', 'system', 'javascript']:
+            print(f"   - Add external system integration for {tag}")
+        elif tag in ['date', 'id', 'size', 'version']:
+            print(f"   - Add metadata extraction for {tag}")
+        elif tag in ['name', 'value', 'index']:
+            print(f"   - Add attribute handling for {tag}")
+        else:
+            print(f"   - Add general tag detection for {tag}")
+
+if __name__ == "__main__":
+    # Run the analysis
+    results = analyze_aiml_tags()
+    
+    # Generate parser updates
+    generate_parser_updates(results)
+    
+    print(f"\n✅ AIML Tag Analysis Complete!")
+    print(f"📊 Summary: {len(results['tag_counts'])} unique tags found across all AIML files") 
